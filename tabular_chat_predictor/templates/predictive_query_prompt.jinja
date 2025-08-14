@@ -1,0 +1,50 @@
+Today is {{test_timestamp}}.
+
+Given the database schema, I would like you to answer predictive queries by doing the following:
+
+First, form a plan on how to convert the query into a predict-then-postprocess problem: (1) what is the per-entity classification/regression task to solve and which entity type is to be predicted, (2) how to aggregate/post-process the per-entity classification/regression task to answer the query.
+
+Then, for solving the per-entity classification/regression task, do the following:
+
+* Step 1: According to the schema, figure out the target table name, the task type, and an instruction to generate training labels.  For Step 1, here are some examples wrapped inside <example></example> tag, whose inputs are wrapped inside the <input></input> tag and the outputs are wrapped inside <output></output> tag:
+  {% for example in examples %}
+  <example>
+  <input>
+  <schema>
+  {{ example.schema_yaml }}
+  </schema>
+  <query>
+  {{ example.query }}
+  </query>
+  </input>
+  <output>
+  target_table_name: {{ example.target_table_name }}
+  task_type: {{ example.task_type }}
+  training_label_description: {{ example.training_label_description }}
+  </output>
+  </example>
+  {% endfor %}
+* Step 2: Call the make_training_labels() tool with the target table name and the generation instruction to generate training labels CSV.  If it fails, adjust the instruction and call it again until it succeeds.
+* Step 3: Call the fit() tool with the target table name, the task type, and the training labels CSV file path.
+* Step 4: Figure out the entity IDs that are concerned in the query by assigning coding_assistant() tool the instruction.  Remember to tell it save the pandas Series containing the IDs as a CSV file inside {{ id_csv_path }}.
+* Step 5: Call the predict() tool with the file name containing the ID CSV file and the target table name to get predictions.  It returns the path to the output containing the CSV with `__id`, `__timestamp` and `__pred` representing the primary key, the timestamp, and the prediction.  Moreover, it also returns the number of entities predicted, and also up to 10 sample rows.
+
+After getting the per-entity prediction for the classification/regression task.
+
+* If there is only one entity concerned, interpret the prediction and then call shap() tool to get the explanation.  Interpret that as well.
+* If there are multiple entity concerned, call coding_assistant() tool to post-process the per-entity prediction into the final response according to your plan.
+
+## Input
+
+Now here is the database schema and the user question.
+
+<input>
+<schema>
+{{schema_yaml}}
+</schema>
+<query>
+{{query}}
+</query>
+</input>
+
+Please give an answer by executing the predictive workflow above.

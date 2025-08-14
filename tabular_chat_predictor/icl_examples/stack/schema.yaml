@@ -1,0 +1,109 @@
+description: |
+  Stack Exchange is a network of question-and-answer websites on topics in diverse fields, each site covering a specific topic,
+  where questions, answers, and users are subject to a reputation award process.
+tables:
+- columns:
+  - dtype: primary_key
+    name: Id
+  - dtype: foreign_key
+    link_to: posts.Id
+    name: PostId
+  - dtype: foreign_key
+    link_to: users.Id
+    name: UserId
+  - dtype: float
+    name: PostHistoryTypeId
+  - dtype: category
+    name: ContentLicense
+  - dtype: datetime
+    name: CreationDate
+  name: postHistory
+  time_column: CreationDate
+- columns:
+  - dtype: primary_key
+    name: Id
+  - dtype: float
+    name: AccountId
+  - dtype: datetime
+    name: CreationDate
+  name: users
+  time_column: CreationDate
+- columns:
+  - dtype: primary_key
+    name: Id
+  - dtype: foreign_key
+    link_to: posts.Id
+    name: PostId
+  - dtype: foreign_key
+    link_to: users.Id
+    name: UserId
+  - dtype: category
+    name: ContentLicense
+  - dtype: datetime
+    name: CreationDate
+  name: comments
+  time_column: CreationDate
+- columns:
+  - dtype: primary_key
+    name: Id
+  - dtype: foreign_key
+    link_to: users.Id
+    name: UserId
+  - dtype: float
+    name: Class
+  - dtype: float
+    name: TagBased
+  - dtype: datetime
+    name: Date
+  name: badges
+  time_column: Date
+- columns:
+  - dtype: primary_key
+    name: Id
+  - dtype: foreign_key
+    link_to: users.Id
+    name: UserId
+  - dtype: foreign_key
+    link_to: posts.Id
+    name: PostId
+  - dtype: float
+    name: VoteTypeId
+  - dtype: datetime
+    name: CreationDate
+  name: votes
+  time_column: CreationDate
+- columns:
+  - dtype: primary_key
+    name: Id
+  - dtype: foreign_key
+    link_to: users.Id
+    name: OwnerUserId
+  - dtype: category
+    name: PostTypeId
+  - dtype: foreign_key
+    link_to: posts.Id
+    name: AcceptedAnswerId
+  - dtype: foreign_key
+    link_to: posts.Id
+    name: ParentId
+  - dtype: category
+    name: ContentLicense
+  - dtype: datetime
+    name: CreationDate
+  name: posts
+  time_column: CreationDate
+- columns:
+  - dtype: primary_key
+    name: Id
+  - dtype: foreign_key
+    link_to: posts.Id
+    name: RelatedPostId
+  - dtype: foreign_key
+    link_to: posts.Id
+    name: PostId
+  - dtype: float
+    name: LinkTypeId
+  - dtype: datetime
+    name: CreationDate
+  name: postLinks
+  time_column: CreationDate

@@ -1,0 +1,46 @@
+description: |
+  The Amazon e-commerce relational database is a product and user purchasing behavior across Amazon's e-commerce platform.
+column_groups: null
+dataset_name: rel-amazon
+tables:
+- columns:
+  - dtype: datetime
+    name: review_time
+  - dtype: foreign_key
+    link_to: customer.customer_id
+    name: customer_id
+  - dtype: foreign_key
+    link_to: product.product_id
+    name: product_id
+  - dtype: float
+    name: rating
+  - dtype: float
+    name: verified
+  - dtype: text
+    name: review_text
+  - dtype: text
+    name: summary
+  name: review
+  time_column: review_time
+- columns:
+  - dtype: primary_key
+    name: customer_id
+  - dtype: text
+    name: customer_name
+  name: customer
+  time_column: null
+- columns:
+  - dtype: primary_key
+    name: product_id
+  - dtype: text
+    name: category
+  - dtype: text
+    name: brand
+  - dtype: text
+    name: title
+  - dtype: text
+    name: description
+  - dtype: float
+    name: price
+  name: product
+  time_column: null

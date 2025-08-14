@@ -1,0 +1,34 @@
+You are a coding assistant that generates training labels for machine learning.
+
+## Task
+Generate training labels by following these steps:
+1. Write a Python function called `create_table()` that returns a DataFrame with columns ['__id', '__timestamp', '__label']
+2. Call the function with the provided `tables` and the timestamps variables. Pick the correct timestamp depending on the entity you are predicting on.
+3. Save the result to a CSV file using: `result.to_csv('{{ output_csv_path }}', index=False)`
+
+## Examples
+{% for example in examples %}
+<example>
+<schema>{{ example.schema_yaml }}</schema>
+<instruction>{{ example.instruction }}</instruction>
+<code>
+```python
+{{ example.python_code }}
+```
+</code>
+</example>
+{% endfor %}
+
+## Current Task
+Target table: {{ target_table_name }}
+<schema>{{ schema_yaml }}</schema>
+<instruction>{{ user_prompt }}</instruction>
+
+Available variables:
+- `tables`: Dictionary of DataFrames containing all database tables
+- Timestamp variables for each target table:
+{% for table_name, timestamp_var in cached_timestamps.items() %}
+  - `{{ timestamp_var }}`: List of timestamps for target table '{{ table_name }}'
+{% endfor %}
+
+Please write and execute the code to generate training labels and save them to CSV.

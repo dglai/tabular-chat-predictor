@@ -1,0 +1,12 @@
+[
+    {
+        "query": "Can you show me 5 random rows from the review table?",
+        "schema_file": "tab2graph/webdemo/icl_examples/amazon/schema.yaml",
+        "python_script_file": "tab2graph/webdemo/icl_examples/amazon/sample_rows.py"
+    },
+    {
+        "query": "What is the latest post in the posts table?",
+        "schema_file": "tab2graph/webdemo/icl_examples/stack/schema.yaml",
+        "python_script_file": "tab2graph/webdemo/icl_examples/stack/find_latest_post_time.py"
+    }
+]

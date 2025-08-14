@@ -1,0 +1,105 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tabular-chat-predictor"
+version = "0.1.0"
+description = "Interactive LLM-driven predictive analytics for tabular data"
+readme = "README.md"
+requires-python = ">=3.8"
+license = {text = "MIT"}
+authors = [
+    {name = "Tabular Chat Predictor Team"}
+]
+keywords = ["machine learning", "tabular data", "prediction", "llm", "chat", "tabpfn"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+
+dependencies = [
+    # Core ML & TabPFN (webdemo-specific)
+    "tabpfn>=2.0.9",
+    "tabpfn-extensions>=0.0.4",
+    "scikit-learn>=1.6.0",
+    
+    # LLM Integration (webdemo-specific)
+    "litellm>=1.74.0",
+    "jinja2>=3.1.6",
+    "pydantic>=2.11.7",
+    
+    # UI Components (webdemo-specific)
+    "streamlit>=1.46.0",
+    "streamlit-mermaid>=0.3.0",
+    "rich>=14.0.0",
+    "prompt-toolkit",
+    
+    # Data Processing (webdemo-specific)
+    "pandas>=2.2.3",
+    "numpy>=2.2.0",
+    "duckdb>=1.3.0",
+    "pyyaml>=6.0.2",
+    
+    # Python Environment & Visualization (webdemo-specific)
+    "ipython",
+    "matplotlib>=3.10.0",
+    "seaborn>=0.12.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-cov>=4.0.0",
+    "black>=23.0.0",
+    "isort>=5.12.0",
+    "flake8>=6.0.0",
+    "mypy>=1.0.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/your-org/tabular-chat-predictor"
+Repository = "https://github.com/your-org/tabular-chat-predictor"
+Documentation = "https://github.com/your-org/tabular-chat-predictor#readme"
+"Bug Tracker" = "https://github.com/your-org/tabular-chat-predictor/issues"
+
+[project.scripts]
+tabular-chat-predictor = "tabular_chat_predictor.frontends.console_frontend:main"
+tabular-chat-streamlit = "tabular_chat_predictor.frontends.streamlit_frontend:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["tabular_chat_predictor*"]
+
+[tool.setuptools.package-data]
+tabular_chat_predictor = [
+    "templates/*.jinja",
+    "*.jinja",
+    "icl_examples/*.json",
+    "icl_examples/amazon/*",
+    "icl_examples/stack/*",
+]
+
+[tool.black]
+line-length = 88
+target-version = ['py38']
+
+[tool.isort]
+profile = "black"
+line_length = 88
+
+[tool.mypy]
+python_version = "3.8"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
