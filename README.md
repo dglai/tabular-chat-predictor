@@ -13,6 +13,8 @@ Interactive LLM-driven predictive analytics for tabular data using TabPFN and in
 - 🧠 **Intelligent Orchestration**: Automatic tool selection and workflow management
 
 ## 🚀 Quick Start
+### Dataset
+Unpack the tar.gz files inside `datasets/demo` and then run `run-dfs.sh` to process them.
 
 ### Installation
 
