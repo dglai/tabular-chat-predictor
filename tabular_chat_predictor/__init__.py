@@ -42,7 +42,6 @@ Example Usage:
 # Users should interact through ComputeEngine and agents
 
 __all__ = [
-    # Main interfaces will be added here as needed
 ]
 
-__version__ = '0.2.0'
+__version__ = '0.1.0'

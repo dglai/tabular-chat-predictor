@@ -5,8 +5,8 @@
         "test_primary_key_value": "1592898",
         "task_type": "classification",
         "training_label_description": "Generate labels on whether a user will not buy or review any product in the next quarter (3 months) after a certain timestamp: 1 if the user will not buy or review any product, and 0 otherwise.",
-        "schema_file": "tab2graph/webdemo/icl_examples/amazon/schema.yaml",
-        "python_script_file": "tab2graph/webdemo/icl_examples/amazon/user_churn.py"
+        "schema_file": "tabular_chat_predictor/icl_examples/amazon/schema.yaml",
+        "python_script_file": "tabular_chat_predictor/icl_examples/amazon/user_churn.py"
     },
     {
         "query": "How much will user ID 1593600 spend in the next quarter (3 months)?",
@@ -14,8 +14,8 @@
         "test_primary_key_value": "1593600",
         "task_type": "regression",
         "training_label_description": "Generate labels on the total $ value of the products a user will buy or review in the next quarter (3 months) after a certain timestamp.",
-        "schema_file": "tab2graph/webdemo/icl_examples/amazon/schema.yaml",
-        "python_script_file": "tab2graph/webdemo/icl_examples/amazon/user_ltv.py"
+        "schema_file": "tabular_chat_predictor/icl_examples/amazon/schema.yaml",
+        "python_script_file": "tabular_chat_predictor/icl_examples/amazon/user_ltv.py"
     },
     {
         "query": "Would product ID 420601 be bought or reviewed by any user in the next quarter (3 months)?",
@@ -23,8 +23,8 @@
         "test_primary_key_value": "420601",
         "task_type": "classification",
         "training_label_description": "Generate labels on whether a product will be bought or reviewed by any user in the next quarter (3 months) after a certain timestamp: 1 if the product will be bought or reviewed, and 0 otherwise.",
-        "schema_file": "tab2graph/webdemo/icl_examples/amazon/schema.yaml",
-        "python_script_file": "tab2graph/webdemo/icl_examples/amazon/item_churn.py"
+        "schema_file": "tabular_chat_predictor/icl_examples/amazon/schema.yaml",
+        "python_script_file": "tabular_chat_predictor/icl_examples/amazon/item_churn.py"
     },
     {
         "query": "How much sales will product ID 432527 generate in the next quarter (3 months)?",
@@ -32,8 +32,8 @@
         "test_primary_key_value": "432527",
         "task_type": "regression",
         "training_label_description": "Generate labels on the total $ value of all purchases on a product in the next quarter (3 months) after a certain timestamp.",
-        "schema_file": "tab2graph/webdemo/icl_examples/amazon/schema.yaml",
-        "python_script_file": "tab2graph/webdemo/icl_examples/amazon/item_ltv.py"
+        "schema_file": "tabular_chat_predictor/icl_examples/amazon/schema.yaml",
+        "python_script_file": "tabular_chat_predictor/icl_examples/amazon/item_ltv.py"
     },
     {
         "query": "Would user ID 2666 make any votes, posts or comments in the next quarter (3 months)?",
@@ -41,8 +41,8 @@
         "test_primary_key_value": "2666",
         "task_type": "classification",
         "training_label_description": "Generate labels on whether a user will make any votes, posts or comments in the next quarter (3 months) after a certain timestamp: 1 if the user will make any votes, posts or comments, and 0 otherwise.",
-        "schema_file": "tab2graph/webdemo/icl_examples/stack/schema.yaml",
-        "python_script_file": "tab2graph/webdemo/icl_examples/stack/user_engagement.py"
+        "schema_file": "tabular_chat_predictor/icl_examples/stack/schema.yaml",
+        "python_script_file": "tabular_chat_predictor/icl_examples/stack/user_engagement.py"
     },
     {
         "query": "Would user ID 76999 receive any new badge in the next quarter (3 months)?",
@@ -50,8 +50,8 @@
         "test_primary_key_value": "76999",
         "task_type": "classification",
         "training_label_description": "Generate labels on whether a user will receive any new badge in the next quarter (3 months) after a certain timestamp: 1 if the user will receive any new badge, and 0 otherwise.",
-        "schema_file": "tab2graph/webdemo/icl_examples/stack/schema.yaml",
-        "python_script_file": "tab2graph/webdemo/icl_examples/stack/user_badge.py"
+        "schema_file": "tabular_chat_predictor/icl_examples/stack/schema.yaml",
+        "python_script_file": "tabular_chat_predictor/icl_examples/stack/user_badge.py"
     },
     {
         "query": "How many votes would post ID 115603 receive in the next quarter (3 months)?",
@@ -59,7 +59,7 @@
         "test_primary_key_value": "115603",
         "task_type": "regression",
         "training_label_description": "Generate labels on how many votes a post will receive in the next quarter (3 months) after a certain timestamp.",
-        "schema_file": "tab2graph/webdemo/icl_examples/stack/schema.yaml",
-        "python_script_file": "tab2graph/webdemo/icl_examples/stack/post_votes.py"
+        "schema_file": "tabular_chat_predictor/icl_examples/stack/schema.yaml",
+        "python_script_file": "tabular_chat_predictor/icl_examples/stack/post_votes.py"
     }
 ]

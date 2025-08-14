@@ -19,7 +19,7 @@ The `Tool` class wraps a Python function and provides JSON schema generation and
 ### Creating a Tool
 
 ```python
-from tab2graph.webdemo.core.tool import make_tool
+from tabular_chat_predictor.core.tool import make_tool
 
 def calculate_sum(a: int, b: int) -> int:
     """Calculate the sum of two numbers."""
@@ -40,7 +40,7 @@ result = tool({"a": 5, "b": 3})  # Returns 8
 The `ToolRegistry` class manages collections of tools and provides integration with LiteLLM.
 
 ```python
-from tab2graph.webdemo.core.tool_registry import ToolRegistry
+from tabular_chat_predictor.core.tool_registry import ToolRegistry
 
 # Create registry
 registry = ToolRegistry()
@@ -64,7 +64,7 @@ result = func(**kwargs)
 The `ToolRegistryMixin` provides decorator-based tool registration for classes. This is the recommended approach.
 
 ```python
-from tab2graph.webdemo.core.tool_registry import ToolRegistryMixin
+from tabular_chat_predictor.core.tool_registry import ToolRegistryMixin
 from typing import Annotated
 from pydantic import Field
 
@@ -235,7 +235,7 @@ if response.choices[0].message.tool_calls:
 ## Complete Example
 
 ```python
-from tab2graph.webdemo.core.tool_registry import ToolRegistryMixin
+from tabular_chat_predictor.core.tool_registry import ToolRegistryMixin
 from typing import Annotated, Optional, List
 from pydantic import Field, BaseModel
 from enum import Enum

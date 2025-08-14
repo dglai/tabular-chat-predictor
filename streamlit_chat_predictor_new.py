@@ -1,0 +1,3 @@
+import tabular_chat_predictor.frontends.streamlit_frontend as streamlit_frontend
+
+streamlit_frontend.main()

@@ -332,7 +332,7 @@ class PredictingAssistant(BaseAgent, ToolRegistryMixin):
         enriched_examples = []
         for example in examples_data:
             # Load schema
-            schema_file = example.get("schema_file", "").replace("tab2graph/webdemo/", "")
+            schema_file = example.get("schema_file", "").replace("tabular_chat_predictor/", "")
             if schema_file:
                 schema_path = Path(__file__).parent.parent / schema_file
                 with open(schema_path, 'r') as f:
@@ -341,7 +341,7 @@ class PredictingAssistant(BaseAgent, ToolRegistryMixin):
                 schema_yaml = ""
             
             # Load Python code
-            python_file = example.get("python_script_file", "").replace("tab2graph/webdemo/", "")
+            python_file = example.get("python_script_file", "").replace("tabular_chat_predictor/", "")
             if python_file:
                 python_path = Path(__file__).parent.parent / python_file
                 with open(python_path, 'r') as f:
