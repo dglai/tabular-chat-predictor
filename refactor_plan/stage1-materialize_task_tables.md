@@ -49,10 +49,10 @@ To create a training set, we need to generate historical data points. This is ac
 
 ### 3. Determine Entity Sampling Strategy
 
-The function determines how to sample entities for the training set based on the schema of the `target_table`. This logic is adapted from `_determine_strategies` in `convert_dataset.py`.
-- **`creation_based`**: Used if the `target_table` itself has a temporal column. Training samples are created from entities that existed at each historical timestamp.
-- **`activity_based`**: Used if the `target_table` has no temporal column but is referenced by other tables that do. This is common for entity tables like `users`. Training samples are selected based on the activity in related tables (e.g., users who made a post or comment).
-- **`static`**: Used if the `target_table` and its direct relationships have no temporal aspect. All entities are considered for sampling.
+The function determines how to sample entities for the training set based on the schema of the primary target table identified by `key_mapping['__id']`. This logic is adapted from `_determine_strategies` in `convert_dataset.py`.
+- **`creation_based`**: Used if the primary target table itself has a temporal column. Training samples are created from entities that existed at each historical timestamp.
+- **`activity_based`**: Used if the primary target table has no temporal column but is referenced by other tables that do. This is common for entity tables like `users`. Training samples are selected based on the activity in related tables (e.g., users who made a post or comment).
+- **`static`**: Used if the primary target table and its direct relationships have no temporal aspect. All entities are considered for sampling.
 
 ### 4. Materialize the Training Table (`train_table`)
 
@@ -60,7 +60,7 @@ This is the core step where the training data is constructed in a single, unifie
 1.  **Generate Labeled Training Candidates**: The `query_spec.label_spec` is executed first. This Python code defines the prediction target and returns a DataFrame containing `__id`, `__timestamp`, and the ground-truth `__label` for every potential training instance. This may be a very large set.
 2.  **Sample, Select Features, and Materialize**: Based on the determined sampling strategy (`creation_based`, `activity_based`, or `static`), the system processes the labeled candidates. In a single logical step (likely a unified SQL query), it performs two actions:
     *   It samples the candidates according to the `sampling_rate`.
-    *   For the sampled entities, it selects and joins the required entity feature columns from the `target_table` (excluding keys and time columns).
+    *   For the sampled entities, it selects and joins the required entity feature columns from the primary target table (excluding keys and time columns).
 This one-step process directly produces the final `train_table`.
 
 The final `train_table` contains the columns `[__id, __timestamp, __label, ...entity_features]`.
@@ -68,9 +68,9 @@ The final `train_table` contains the columns `[__id, __timestamp, __label, ...en
 ### 5. Materialize the Test Table (`test_table`)
 
 The test table represents the prediction task.
-1.  **Select Test Entities**: The entities are specified by `query_spec.entity_ids`. If this is `None`, all entities in the `target_table` are used.
+1.  **Select Test Entities**: The entities are specified by `query_spec.entity_ids`. If this is `None`, all entities in the primary target table are used.
 2.  **Set Timestamp**: The `__timestamp` for all rows in the test table is set to `query_spec.ts_current`.
-3.  **Join Entity Features**: The same static entity features from the `target_table` are joined.
+3.  **Join Entity Features**: The same static entity features from the primary target table are joined.
 4.  **Add Null Label Column**: A `__label` column is added and filled with `NULL` values, as this is what the model will predict.
 
 The final `test_table` has the same schema as the `train_table`.
@@ -92,7 +92,7 @@ The `materialize_task_tables` function, guided by the `QuerySpec`, is a signific
 
 -   **Elimination of Redundant Processing**:
     -   **Data Loading**: The `convert` script loads all data from disk on every run. The server loads the `RDBDataset` only once at startup, removing this I/O overhead from the query path.
-    -   **Target Iteration**: The `convert` script inefficiently iterates over all possible tables to generate tasks. `materialize_task_tables` is highly efficient as it only ever processes the single `target_table` specified in the `QuerySpec`.
+    -   **Target Iteration**: The `convert` script inefficiently iterates over all possible tables to generate tasks. `materialize_task_tables` is highly efficient as it only ever processes the primary target table specified in the `QuerySpec`.
 
 -   **Dynamic and Powerful Labeling**: The most critical improvement is the `label_spec`.
     -   In `convert_dataset.py`, label generation was trivial and hardcoded (e.g., random labels), making it unsuitable for real tasks.
@@ -117,8 +117,10 @@ async def materialize_task_tables(server: 'TabularPredictionMCPServer') -> TaskT
     # 1. Get context from the server
     query = server.current_query_spec
     rdb = server.rdb_dataset
-    target_table_df = rdb.get_table(query.target_table)
-    target_table_schema = rdb.get_table_metadata(query.target_table)
+    # Derive the primary target table from the key_mapping
+    target_table, _ = query.key_mapping['__id'].split('.')
+    target_table_df = rdb.get_table(target_table)
+    target_table_schema = rdb.get_table_metadata(target_table)
 
     # 2. Generate historical timestamps for training
     timestamps = _generate_timestamps(
@@ -278,15 +280,15 @@ def _materialize_training_table(query, rdb, timestamps, target_table_df, target_
     #    This mirrors the original script's unified query approach.
     if sampling_strategy == "creation_based":
         train_table = _apply_creation_based_sampling_with_features(
-            labeled_data, target_table_df, target_table_schema, query.sampling_rate, query.id_column
+            labeled_data, target_table_df, target_table_schema, query.sampling_rate
         )
     elif sampling_strategy == "activity_based":
         train_table = _apply_activity_based_sampling_with_features(
-            labeled_data, rdb, target_table_schema, query.sampling_rate, query.id_column
+            labeled_data, rdb, target_table_schema, query.sampling_rate
         )
     else:  # static
         train_table = _apply_static_sampling_with_features(
-            labeled_data, target_table_df, target_table_schema, query.sampling_rate, query.id_column
+            labeled_data, target_table_df, target_table_schema, query.sampling_rate
         )
     
     return train_table
@@ -295,8 +297,7 @@ def _materialize_training_table(query, rdb, timestamps, target_table_df, target_
 **Input Example:**
 ```python
 query = QuerySpec(
-    target_table="users",
-    id_column="Id",
+    key_mapping={"__id": "users.Id"},
     ts_current=datetime(2021, 1, 1),
     label_spec="...",  # Complex user engagement prediction
     sampling_rate=0.3
@@ -353,9 +354,11 @@ def _materialize_test_table(
 def _materialize_test_table(query, target_table_df, target_table_schema):
     # 1. Select test entities
     if query.entity_ids is not None:
+        # Derive id_column from key_mapping
+        _, id_column = query.key_mapping['__id'].split('.')
         # Filter to specific entities
         test_df = target_table_df[
-            target_table_df[query.id_column].isin(query.entity_ids)
+            target_table_df[id_column].isin(query.entity_ids)
         ].copy()
     else:
         # Use all entities in target table
@@ -369,7 +372,8 @@ def _materialize_test_table(query, target_table_df, target_table_schema):
             feature_columns.append(col_schema.name)
     
     # Keep the primary key for the ID and the selected feature columns
-    primary_key_col = query.id_column
+    # Derive primary key from key_mapping
+    _, primary_key_col = query.key_mapping['__id'].split('.')
     include_columns = [primary_key_col] + feature_columns
     available_columns = [col for col in include_columns if col in test_df.columns]
     test_table = test_df[available_columns]
@@ -390,9 +394,8 @@ def _materialize_test_table(query, target_table_df, target_table_schema):
 **Input Example:**
 ```python
 query = QuerySpec(
-    target_table="users",
+    key_mapping={"__id": "users.Id"},
     entity_ids=[2666],  # Specific user for prediction
-    id_column="Id",
     ts_current=datetime(2021, 1, 1)
 )
 target_table_df = pd.DataFrame({
@@ -603,9 +606,8 @@ Here's a comprehensive example showing how all sub-APIs work together:
 # Server state
 server.rdb_dataset = RDBDataset("stackexchange_data")  # Loaded at startup
 server.current_query_spec = QuerySpec(
-    target_table="users",
+    key_mapping={"__id": "users.Id"},
     entity_ids=[2666],
-    id_column="Id",
     ts_current=datetime(2021, 1, 1),
     task_type="classification",
     label_spec="""
@@ -682,7 +684,9 @@ train_table = _apply_activity_based_sampling_with_features(
     server.rdb_dataset,
     server.rdb_dataset.get_table_metadata("users"),
     server.current_query_spec.sampling_rate,
-    server.current_query_spec.id_column
+    # Derive id_column from key_mapping
+    _, id_column = server.current_query_spec.key_mapping['__id'].split('.')
+    id_column
 )
 # Result: ~15,000 training examples with timestamps, labels, and user features,
 # created without a separate feature-joining step.
@@ -730,7 +734,7 @@ The `QuerySpec` design dramatically simplifies the materialization process compa
 
 ### 2. **Single-Table Focus vs. Batch Processing**
 - **Before**: Script iterates over all tables to generate multiple tasks
-- **After**: Function processes only the specified `target_table`, making it much faster and more focused
+- **After**: Function processes only the specified primary target table, making it much faster and more focused
 
 ### 3. **Dynamic Label Generation vs. Static Random Labels**
 - **Before**: Labels are randomly generated: `training_df['__label__'] = np.random.choice([0, 1], size=len(training_df))`

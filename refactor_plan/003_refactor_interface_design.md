@@ -121,11 +121,12 @@ class TabularPredictionMCPServer:
 ```python
 @dataclass
 class QuerySpec:
-    """Simplified query specification - only essential information for the query."""
+    """Optimized query specification using key_mapping for explicit entity definition."""
     # Core query parameters
-    target_table: str                   # Target table name (e.g., "users", "customer")
-    entity_ids: Optional[List[Any]]     # Specific entity IDs (None = all entities)
-    id_column: str                      # Primary key column name
+    key_mapping: Dict[str, str]         # Maps task table IDs to RDB primary keys.
+                                        # e.g., {"__id": "users.Id"} for classification
+                                        # e.g., {"__id": "users.Id", "__target_id": "posts.Id"} for link prediction
+    entity_ids: Optional[List[Any]]     # Specific entity IDs for the primary key (None = all entities)
     ts_current: datetime                # Current timestamp for predictions
     label_spec: str                     # Python code for label generation
     task_type: Literal["classification", "regression", "link prediction"]
@@ -157,8 +158,11 @@ async def materialize_task_tables(server: 'TabularPredictionMCPServer') -> TaskT
     # 1. Get context from the server
     query = server.current_query_spec
     rdb = server.rdb_dataset
-    target_table_df = rdb.get_table(query.target_table)
-    target_table_schema = rdb.get_table_metadata(query.target_table)
+    
+    # Derive target table and primary key from key_mapping
+    target_table, _ = query.key_mapping['__id'].split('.')
+    target_table_df = rdb.get_table(target_table)
+    target_table_schema = rdb.get_table_metadata(target_table)
 
     # 2. Generate historical timestamps for training
     timestamps = _generate_timestamps(
@@ -221,11 +225,8 @@ async def generate_task_features(task_tables: TaskTables, server: 'TabularPredic
     transform_pipeline = _create_transform_pipeline()
     transformed_rdb = transform_pipeline(rdb)
     
-    # 4. Generate key mappings based on target table
-    key_mappings = _generate_key_mappings(
-        query.target_table,
-        rdb.get_table_metadata(query.target_table)
-    )
+    # 4. Use key mappings directly from the query
+    key_mappings = query.key_mapping
     
     # 5. Generate features for train set
     train_features = _generate_features(
@@ -473,9 +474,8 @@ await mcp_server.start()
 # (comment, vote, or post) within the next 90 days.
 # Client sends a classification query to the MCP server
 query_spec_classification = QuerySpec(
-    target_table="users",
+    key_mapping={"__id": "users.Id"},
     entity_ids=[2666],
-    id_column="Id",
     ts_current=datetime(2021, 1, 1),
     task_type="classification",
     label_spec="""
@@ -535,9 +535,8 @@ def create_table(
 # It samples 20% of the posts for the training data.
 # Client sends a regression query to the MCP server
 query_spec_regression = QuerySpec(
-    target_table="posts",
+    key_mapping={"__id": "posts.Id"},
     entity_ids=None,  # All posts
-    id_column="Id",
     ts_current=datetime(2021, 1, 1),
     task_type="regression",
     label_spec="""
@@ -575,9 +574,8 @@ def create_table(
 # This is a link prediction task where a "link" is a comment connecting a user and a post.
 # Client sends a link prediction query to the MCP server
 query_spec_link_prediction = QuerySpec(
-    target_table="comments", # The table where links are formed
+    key_mapping={"__id": "users.Id", "__target_id": "posts.Id"},
     entity_ids=None, # We will generate candidate links
-    id_column="Id", # The primary key of the comments table
     ts_current=datetime(2021, 1, 1),
     task_type="link prediction",
     label_spec="""
@@ -686,10 +684,13 @@ async def materialize_task_tables(server: 'TabularPredictionMCPServer') -> 'Task
     # Context
     query = server.current_query_spec
     rdb = server.rdb_dataset
-    target_table_df = rdb.get_table(query.target_table)
-    target_table_schema = rdb.get_table_metadata(query.target_table)
+    
+    # Derive target table from key_mapping
+    target_table, id_column = query.key_mapping['__id'].split('.')
+    target_table_df = rdb.get_table(target_table)
+    target_table_schema = rdb.get_table_metadata(target_table)
 
-    trace(f"[Stage 1] Using target_table={query.target_table}, id_column={query.id_column}")
+    trace(f"[Stage 1] Using target_table={target_table}, id_column={id_column}")
     timestamps = _generate_timestamps(query.ts_current, rdb)
     train_table = _materialize_training_table(query, rdb, timestamps, target_table_df, target_table_schema)
     test_table = _materialize_test_table(query, target_table_df, target_table_schema)
@@ -709,7 +710,7 @@ async def generate_task_features(task_tables: 'TaskTables', server: 'TabularPred
     transform_pipeline = _create_transform_pipeline()
     transformed_rdb = transform_pipeline(rdb)
 
-    key_mappings = _generate_key_mappings(query.target_table, rdb.get_table_metadata(query.target_table))
+    key_mappings = query.key_mapping
 
     train_features = _generate_features(transformed_rdb, train_cutoff_df, key_mappings, dfs_config)
     test_features = _generate_features(transformed_rdb, test_cutoff_df, key_mappings, dfs_config, feature_names=train_features.columns)
@@ -759,9 +760,8 @@ async def demo_end_to_end():
 
     # Example classification query (user engagement)
     query_spec = QuerySpec(
-        target_table="users",
+        key_mapping={"__id": "users.Id"},
         entity_ids=[2666],
-        id_column="Id",
         ts_current=datetime(2021, 1, 1),
         task_type="classification",
         label_spec="""

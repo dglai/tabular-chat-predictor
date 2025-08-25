@@ -168,8 +168,9 @@ def _prepare_training_data(train_features_table, task_type):
     
     # 2. Remove non-feature columns to create the feature set (X_train)
     #    The label is now included in the list of columns to drop.
+    #    For link prediction, __target_id should also be excluded from features.
     feature_columns = [col for col in train_features_table.columns
-                      if col not in ['__id', '__timestamp', '__label']]
+                      if col not in ['__id', '__timestamp', '__label', '__target_id']]
     X_train = train_features_table[feature_columns].copy()
     
     # 5. Handle missing values in features
@@ -621,7 +622,12 @@ def _format_prediction_results(
 ```python
 def _format_prediction_results(test_df, predictions, task_type):
     # 1. Extract entity IDs and timestamps
-    result_df = test_df[['__id', '__timestamp']].copy()
+    # 1. Extract entity IDs and timestamps
+    #    For link prediction, include __target_id in the output.
+    id_columns = ['__id', '__timestamp']
+    if '__target_id' in test_df.columns:
+        id_columns.append('__target_id')
+    result_df = test_df[id_columns].copy()
     
     # 2. Add predictions
     result_df['y_pred'] = predictions['y_pred']
@@ -685,9 +691,8 @@ server.tabpfn_config = {
     'device': 'cpu'
 }
 server.current_query_spec = QuerySpec(
-    target_table="users",
+    key_mapping={"__id": "users.Id"},
     entity_ids=[2666],
-    id_column="Id",
     ts_current=datetime(2021, 1, 1),
     task_type="classification"
 )

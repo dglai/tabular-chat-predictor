@@ -96,11 +96,8 @@ async def generate_task_features(task_tables: TaskTables, server: 'TabularPredic
     transform_pipeline = _create_transform_pipeline()
     transformed_rdb = transform_pipeline(rdb)
     
-    # 3. Generate key mappings based on target table
-    key_mappings = _generate_key_mappings(
-        query.target_table,
-        rdb.get_table_metadata(query.target_table)
-    )
+    # 3. Use key mappings directly from the query
+    key_mappings = query.key_mapping
     
     # 4. Generate features for train set
     train_features = _generate_features(
@@ -176,8 +173,7 @@ server_config = {
 }
 
 query = QuerySpec(
-    target_table="users",
-    id_column="Id",
+    key_mapping={"__id": "users.Id"},
     dfs_depth=3  # Override default depth
 )
 ```
@@ -235,67 +231,6 @@ RDBTransformPipeline([
 ])
 ```
 
----
-
-### Sub-API 3: `_generate_key_mappings`
-
-This function generates mappings between entity IDs in the task tables and their corresponding primary keys in the RDB.
-
-**Signature:**
-```python
-def _generate_key_mappings(
-    target_table: str,
-    target_table_schema: RDBTableSchema
-) -> Dict[str, str]:
-    """
-    Generate key mappings for FastDFS.
-    
-    Args:
-        target_table: Name of the target table
-        target_table_schema: Schema of the target table
-        
-    Returns:
-        Dictionary mapping task table columns to RDB primary keys
-    """
-```
-
-**Pseudocode:**
-```python
-def _generate_key_mappings(target_table, target_table_schema):
-    # Find primary key column
-    primary_key = None
-    for col in target_table_schema.columns:
-        if col.dtype == "primary_key":
-            primary_key = col.name
-            break
-    
-    if not primary_key:
-        raise ValueError(f"No primary key found in table {target_table}")
-    
-    # Create mapping from __id to target_table.primary_key
-    return {"__id": f"{target_table}.{primary_key}"}
-```
-
-**Input Example:**
-```python
-target_table = "users"
-target_table_schema = RDBTableSchema(
-    name="users",
-    source="data/users.npz",
-    columns=[
-        RDBColumnSchema(name="Id", dtype="primary_key"),
-        RDBColumnSchema(name="DisplayName", dtype="string"),
-        RDBColumnSchema(name="Reputation", dtype="int")
-    ]
-)
-```
-
-**Output Example:**
-```python
-{"__id": "users.Id"}
-```
-
----
 
 ### Sub-API 4: `_generate_features`
 
@@ -402,9 +337,8 @@ server.dfs_config = {
     'agg_primitives': ['count', 'mean', 'max', 'min', 'std']
 }
 server.current_query_spec = QuerySpec(
-    target_table="users",
+    key_mapping={"__id": "users.Id"},
     entity_ids=[2666],
-    id_column="Id",
     ts_current=datetime(2021, 1, 1),
     task_type="classification",
     dfs_depth=3,  # Override default depth
@@ -449,12 +383,9 @@ transformed_rdb = transform_pipeline(server.rdb_dataset)
 # Result: Preprocessed RDB with datetime features and filtered columns
 ```
 
-**Step 3: Generate Key Mappings**
+**Step 3: Get Key Mappings from Query**
 ```python
-key_mappings = _generate_key_mappings(
-    target_table=server.current_query_spec.target_table,
-    target_table_schema=server.rdb_dataset.get_table_metadata("users")
-)
+key_mappings = server.current_query_spec.key_mapping
 # Result: {"__id": "users.Id"}
 ```
 
