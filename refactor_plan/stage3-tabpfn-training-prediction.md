@@ -93,12 +93,11 @@ async def train_and_predict(
 ) -> PredictionArtifact:
     # 1. Get context from the server
     query = server.current_query_spec
-    tabpfn_config = _merge_tabpfn_configs(server.tabpfn_config, query)
+    tabpfn_config = server.tabpfn_config
     
     # 2. Prepare training data
     train_X, train_y = _prepare_training_data(
         feature_artifacts.train_features_table,
-        task_tables=server.task_tables,
         task_type=query.task_type
     )
     
@@ -138,74 +137,6 @@ async def train_and_predict(
 
 ---
 
-### Sub-API 1: `_merge_tabpfn_configs`
-
-This function merges the server's default TabPFN configuration with any query-specific overrides.
-
-**Signature:**
-```python
-def _merge_tabpfn_configs(
-    server_config: Dict[str, Any],
-    query: QuerySpec
-) -> Dict[str, Any]:
-    """
-    Merge server TabPFN config with query-specific overrides.
-    
-    Args:
-        server_config: Server's default TabPFN configuration
-        query: Current query specification with potential overrides
-        
-    Returns:
-        Merged configuration dictionary
-    """
-```
-
-**Pseudocode:**
-```python
-def _merge_tabpfn_configs(server_config, query):
-    # Start with server config
-    merged_config = server_config.copy()
-    
-    # Override with query-specific parameters if provided
-    if hasattr(query, 'tabpfn_ensemble_size'):
-        merged_config['ensemble_size'] = query.tabpfn_ensemble_size
-    
-    if hasattr(query, 'tabpfn_max_samples'):
-        merged_config['max_samples'] = query.tabpfn_max_samples
-    
-    # Add other query-specific overrides as needed
-    
-    return merged_config
-```
-
-**Input Example:**
-```python
-server_config = {
-    'model_type': 'tabpfn_v2',
-    'ensemble_size': 16,
-    'max_samples': 10000,
-    'device': 'cuda' if torch.cuda.is_available() else 'cpu'
-}
-
-query = QuerySpec(
-    target_table="users",
-    id_column="Id",
-    task_type="classification",
-    tabpfn_ensemble_size=32  # Override default ensemble size
-)
-```
-
-**Output Example:**
-```python
-{
-    'model_type': 'tabpfn_v2',
-    'ensemble_size': 32,  # Overridden from query
-    'max_samples': 10000,
-    'device': 'cuda' if torch.cuda.is_available() else 'cpu'
-}
-```
-
----
 
 ### Sub-API 2: `_prepare_training_data`
 
@@ -215,15 +146,13 @@ This function prepares the training data for the TabPFN model, extracting featur
 ```python
 def _prepare_training_data(
     train_features_table: pd.DataFrame,
-    task_tables: TaskTables,
     task_type: str
 ) -> Tuple[pd.DataFrame, np.ndarray]:
     """
     Prepare training data for TabPFN model.
     
     Args:
-        train_features_table: Feature table from Stage 2
-        task_tables: Task tables from Stage 1 (for labels)
+        train_features_table: Feature table from Stage 2, including the `__label` column.
         task_type: Type of task ('classification' or 'regression')
         
     Returns:
@@ -233,27 +162,15 @@ def _prepare_training_data(
 
 **Pseudocode:**
 ```python
-def _prepare_training_data(train_features_table, task_tables, task_type):
-    # 1. Extract entity IDs and features
-    entity_ids = train_features_table['__id'].values
+def _prepare_training_data(train_features_table, task_type):
+    # 1. Extract labels directly from the feature table
+    y_train = train_features_table['__label'].values
     
-    # 2. Remove non-feature columns
-    feature_columns = [col for col in train_features_table.columns 
-                      if col not in ['__id', 'cutoff_time']]
+    # 2. Remove non-feature columns to create the feature set (X_train)
+    #    The label is now included in the list of columns to drop.
+    feature_columns = [col for col in train_features_table.columns
+                      if col not in ['__id', '__timestamp', '__label']]
     X_train = train_features_table[feature_columns].copy()
-    
-    # 3. Get labels from task_tables
-    train_labels = task_tables.train_table[['__id', '__label']].copy()
-    
-    # 4. Merge labels with entity IDs
-    merged_data = pd.merge(
-        pd.DataFrame({'__id': entity_ids}),
-        train_labels,
-        on='__id',
-        how='left'
-    )
-    
-    y_train = merged_data['__label'].values
     
     # 5. Handle missing values in features
     X_train = _handle_missing_values(X_train)
@@ -274,20 +191,12 @@ def _prepare_training_data(train_features_table, task_tables, task_type):
 ```python
 train_features_table = pd.DataFrame({
     '__id': [1, 5, 8, 12],
-    'cutoff_time': [datetime(2021, 1, 1), datetime(2020, 12, 1), datetime(2020, 11, 1), datetime(2020, 10, 1)],
+    '__timestamp': [datetime(2021, 1, 1), datetime(2020, 12, 1), datetime(2020, 11, 1), datetime(2020, 10, 1)],
+    '__label': [1, 0, 1, 0],
     'users.Reputation': [100, 200, 50, 300],
     'COUNT(posts)': [5, 2, 10, 3],
     'MEAN(posts.Score)': [3.2, 4.5, 2.1, 3.8]
 })
-
-task_tables = TaskTables(
-    train_table=pd.DataFrame({
-        '__id': [1, 5, 8, 12],
-        '__timestamp': [datetime(2021, 1, 1), datetime(2020, 12, 1), datetime(2020, 11, 1), datetime(2020, 10, 1)],
-        '__label': [1, 0, 1, 0]
-    }),
-    test_table=pd.DataFrame({...})
-)
 
 task_type = "classification"
 ```
@@ -571,29 +480,15 @@ def _prepare_test_data(
 **Pseudocode:**
 ```python
 def _prepare_test_data(test_features_table, train_X_columns):
-    # 1. Extract entity IDs and features
-    entity_ids = test_features_table['__id'].values
+    # 1. Select the feature columns, ensuring the order matches the training data.
+    #    Stage 2 guarantees that test_features_table contains all columns from train_X_columns.
+    test_X = test_features_table[train_X_columns].copy()
     
-    # 2. Select only the columns that were used in training
-    feature_columns = [col for col in train_X_columns if col in test_features_table.columns]
-    
-    # 3. Create a DataFrame with the same columns as train_X
-    test_X = pd.DataFrame(index=range(len(entity_ids)), columns=train_X_columns)
-    
-    # 4. Fill in the values for columns that exist in test_features_table
-    for col in feature_columns:
-        test_X[col] = test_features_table[col].values
-    
-    # 5. Handle missing columns (that were in train but not in test)
-    for col in train_X_columns:
-        if col not in feature_columns:
-            # Fill with median from training data (would need to be passed in)
-            test_X[col] = 0  # Placeholder, ideally use training statistics
-    
-    # 6. Handle missing values
+    # 2. Handle missing values within the data
     test_X = _handle_missing_values(test_X)
     
-    # 7. Apply the same scaling as was applied to training data
+    # 3. Apply the same scaling as was applied to training data
+    #    (This assumes the scaler was fit on the training data)
     test_X = _scale_features(test_X)
     
     return test_X
@@ -603,7 +498,7 @@ def _prepare_test_data(test_features_table, train_X_columns):
 ```python
 test_features_table = pd.DataFrame({
     '__id': [2666],
-    'cutoff_time': [datetime(2021, 1, 1)],
+    '__timestamp': [datetime(2021, 1, 1)],
     'users.Reputation': [150],
     'COUNT(posts)': [7],
     'MEAN(posts.Score)': [4.1]
@@ -726,8 +621,7 @@ def _format_prediction_results(
 ```python
 def _format_prediction_results(test_df, predictions, task_type):
     # 1. Extract entity IDs and timestamps
-    result_df = test_df[['__id', 'cutoff_time']].copy()
-    result_df.rename(columns={'cutoff_time': '__timestamp'}, inplace=True)
+    result_df = test_df[['__id', '__timestamp']].copy()
     
     # 2. Add predictions
     result_df['y_pred'] = predictions['y_pred']
@@ -749,7 +643,7 @@ def _format_prediction_results(test_df, predictions, task_type):
 ```python
 test_df = pd.DataFrame({
     '__id': [2666],
-    'cutoff_time': [datetime(2021, 1, 1)],
+    '__timestamp': [datetime(2021, 1, 1)],
     'users.Reputation': [150],
     'COUNT(posts)': [7],
     'MEAN(posts.Score)': [4.1]
@@ -795,15 +689,15 @@ server.current_query_spec = QuerySpec(
     entity_ids=[2666],
     id_column="Id",
     ts_current=datetime(2021, 1, 1),
-    task_type="classification",
-    query_id="user_engagement_classification_2666"
+    task_type="classification"
 )
 
 # Input from Stage 2
 feature_artifacts = FeatureArtifacts(
     train_features_table=pd.DataFrame({
         '__id': [1, 5, 8, 12, ...],                    # ~15,000 training examples
-        'cutoff_time': [datetime(2021, 1, 1), ...],    # Various historical timestamps
+        '__timestamp': [datetime(2021, 1, 1), ...],    # Various historical timestamps
+        '__label': [1, 0, 1, 0, ...],                  # Engagement labels
         'users.Reputation': [100, 200, 50, ...],       # Original features
         # Generated features (100+ columns)
         'COUNT(posts WHERE posts.OwnerUserId = users.Id)': [5, 2, 10, ...],
@@ -814,7 +708,7 @@ feature_artifacts = FeatureArtifacts(
     
     test_features_table=pd.DataFrame({
         '__id': [2666],                                # Target user
-        'cutoff_time': [datetime(2021, 1, 1)],         # Current timestamp
+        '__timestamp': [datetime(2021, 1, 1)],         # Current timestamp
         'users.Reputation': [150],                     # Original features
         # Same generated features as train set
         'COUNT(posts WHERE posts.OwnerUserId = users.Id)': [7],
@@ -824,31 +718,14 @@ feature_artifacts = FeatureArtifacts(
     })
 )
 
-# Task tables from Stage 1 (needed for labels)
-server.task_tables = TaskTables(
-    train_table=pd.DataFrame({
-        '__id': [1, 5, 8, 12, ...],
-        '__timestamp': [datetime(2021, 1, 1), ...],
-        '__label': [1, 0, 1, 0, ...],  # Engagement labels
-        # ... entity features ...
-    }),
-    test_table=pd.DataFrame({
-        '__id': [2666],
-        '__timestamp': [datetime(2021, 1, 1)],
-        '__label': [None],  # To be predicted
-        # ... entity features ...
-    })
-)
+# Task tables from Stage 1 are no longer needed in Stage 3
 ```
 
 ### Step-by-Step Execution:
 
-**Step 1: Merge TabPFN Configurations**
+**Step 1: Get TabPFN Configurations**
 ```python
-tabpfn_config = _merge_tabpfn_configs(
-    server_config=server.tabpfn_config,
-    query=server.current_query_spec
-)
+tabpfn_config = server.tabpfn_config
 # Result: {'model_type': 'tabpfn_v2', 'ensemble_size': 16, 'max_samples': 10000, 'device': 'cpu'}
 ```
 
@@ -856,7 +733,6 @@ tabpfn_config = _merge_tabpfn_configs(
 ```python
 train_X, train_y = _prepare_training_data(
     train_features_table=feature_artifacts.train_features_table,
-    task_tables=server.task_tables,
     task_type=server.current_query_spec.task_type
 )
 # Result: 

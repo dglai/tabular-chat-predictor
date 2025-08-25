@@ -195,7 +195,7 @@ for details, see [fast-dfs.md](stage2-fast-dfs.md)
 @dataclass
 class FeatureArtifacts:
     """Feature artifacts - clean data only."""
-    train_features_table: pd.DataFrame  # Features and labels for training rows
+    train_features_table: pd.DataFrame  # Features for training rows
     test_features_table: pd.DataFrame   # Features for test rows
 
 async def generate_task_features(task_tables: TaskTables, server: 'TabularPredictionMCPServer') -> FeatureArtifacts:
@@ -268,11 +268,12 @@ async def train_and_predict(
 ) -> PredictionArtifact:
     # 1. Get context from the server
     query = server.current_query_spec
-    tabpfn_config = server.tabpfn_config
+    tabpfn_config = _merge_tabpfn_configs(server.tabpfn_config, query)
     
     # 2. Prepare training data
     train_X, train_y = _prepare_training_data(
         feature_artifacts.train_features_table,
+        task_tables=server.task_tables,
         task_type=query.task_type
     )
     
@@ -629,16 +630,21 @@ def create_table(
 # result_link_prediction = await mcp_server.handle_prediction_request(query_spec_link_prediction)
 ```
 
-### End-to-End example
+### End-to-End example with sub-API call tracing
 ```python
 """
 End-to-end example: Stage 1 -> Stage 2 -> Stage 3
 - Shows how the MCP server orchestrates the pipeline using persistent RDBDataset
+- Logs every sub-API call with key parameters and expected shapes/types
+- All annotations in English
+
 NOTE:
 - This example assumes the following are available from your project:
   - RDBDataset, RDBMetadata, RDBTableSchema, RDBColumnSchema
   - QuerySpec, TaskTables, FeatureArtifacts, PredictionArtifact
   - materialize_task_tables, generate_task_features, train_and_predict
+  - All sub-APIs referenced in the stage docs (e.g., _generate_timestamps, etc.)
+- The sub-API functions below are referenced as if they exist; replace stubs with your real implementations.
 """
 
 import asyncio
@@ -656,7 +662,8 @@ class TabularPredictionMCPServer:
         self.dfs_config = config.get("dfs_config", {})
         self.tabpfn_config = config.get("tabpfn_config", {})
         self.current_query_spec: Optional['QuerySpec'] = None
-        # No need to persist TaskTables anymore for Stage 3
+        # Persist TaskTables from Stage 1 for Stage 3 label alignment
+        self.task_tables: Optional['TaskTables'] = None
 
     async def handle_prediction_request(self, query_spec: 'QuerySpec') -> 'PredictionArtifact':
         self.current_query_spec = query_spec
@@ -666,7 +673,8 @@ class TabularPredictionMCPServer:
         # Stage 1
         print("\n[Stage 1] Task Table Materialization: BEGIN")
         task_tables = await materialize_task_tables(self)
-        # No need to store task_tables on the server instance
+        # store for Stage 3
+        self.task_tables = task_tables
         print("[Stage 1] Task Table Materialization: END")
         
         # Stage 2
@@ -681,7 +689,73 @@ class TabularPredictionMCPServer:
         
         return prediction_artifact
 
-# ---- Stage 1 ----
+# --------------------------
+# Tracing wrappers around sub-APIs (only logs; replace with real implementations)
+# --------------------------
+def trace(msg: str):
+    print(f"  - {msg}")
+
+# ---- Stage 1 sub-APIs ----
+def _generate_timestamps(ts_current: datetime, rdb_dataset: 'RDBDataset'):
+    trace(f"_generate_timestamps(ts_current={ts_current}, rdb=RDBDataset(...))")
+    # Replace with your real implementation from Stage 1 doc
+    return [ts_current]  # Minimal placeholder
+
+def _determine_sampling_strategy(target_table_schema: 'RDBTableSchema', rdb_dataset: 'RDBDataset'):
+    trace(f"_determine_sampling_strategy(target_table={target_table_schema.name})")
+    # Replace with your real implementation from Stage 1 doc
+    return "activity_based"
+
+def _execute_label_spec(label_spec: str, rdb_tables: Dict[str, pd.DataFrame], timestamps: pd.Series):
+    trace(f"_execute_label_spec(label_spec=create_table(...), tables={list(rdb_tables.keys())}, timestamps={len(timestamps)})")
+    # Replace with your real implementation from Stage 1 doc
+    # Minimal placeholder DataFrame (id, timestamp, label)
+    return pd.DataFrame({"__timestamp": timestamps, "__id": [1]*len(timestamps), "__label": [1]*len(timestamps)})
+
+def _apply_activity_based_sampling(labeled_data: pd.DataFrame, rdb: 'RDBDataset', target_table_schema: 'RDBTableSchema', sampling_rate: float):
+    trace(f"_apply_activity_based_sampling(rows={len(labeled_data)}, sampling_rate={sampling_rate})")
+    # Replace with your real implementation from Stage 1 doc
+    return labeled_data
+
+def _get_entity_features(target_table_df: pd.DataFrame, target_table_schema: 'RDBTableSchema'):
+    trace(f"_get_entity_features(target_table={target_table_schema.name})")
+    # Replace with your real implementation from Stage 1 doc
+    return target_table_df.copy()
+
+def _materialize_training_table(query: 'QuerySpec', rdb: 'RDBDataset', timestamps, target_table_df, target_table_schema):
+    trace("_materialize_training_table: BEGIN")
+    strategy = _determine_sampling_strategy(target_table_schema, rdb)
+    labeled = _execute_label_spec(query.label_spec, {t: rdb.get_table(t) for t in rdb.table_names}, pd.Series(timestamps))
+    if strategy == "activity_based":
+        sampled = _apply_activity_based_sampling(labeled, rdb, target_table_schema, query.sampling_rate)
+    else:
+        sampled = labeled
+        trace(f"(Strategy={strategy}) Not implemented here; returning labeled_data as-is")
+    features = _get_entity_features(target_table_df, target_table_schema)
+    train_table = sampled.merge(features, left_on="__id", right_on=query.id_column, how="left")
+    if query.id_column in train_table.columns:
+        train_table = train_table.drop(columns=[query.id_column])
+    trace(f"_materialize_training_table: END (rows={len(train_table)}, cols={len(train_table.columns)})")
+    return train_table
+
+def _materialize_test_table(query: 'QuerySpec', target_table_df: pd.DataFrame, target_table_schema: 'RDBTableSchema'):
+    trace("_materialize_test_table: BEGIN")
+    if query.entity_ids is not None:
+        test_entities = target_table_df[target_table_df[query.id_column].isin(query.entity_ids)].copy()
+        trace(f"Selected specific entities: {len(test_entities)}")
+    else:
+        test_entities = target_table_df.copy()
+        trace(f"Selected all entities: {len(test_entities)}")
+    test_entities["__timestamp"] = query.ts_current
+    test_entities["__id"] = test_entities[query.id_column]
+    test_entities["__label"] = None
+    test_table = test_entities.drop(columns=[query.id_column])
+    # Make sure order is stable
+    cols = ["__id", "__timestamp", "__label"] + [c for c in test_table.columns if c not in ["__id", "__timestamp", "__label"]]
+    test_table = test_table[cols]
+    trace(f"_materialize_test_table: END (rows={len(test_table)}, cols={len(test_table.columns)})")
+    return test_table
+
 async def materialize_task_tables(server: 'TabularPredictionMCPServer') -> 'TaskTables':
     # Context
     query = server.current_query_spec
@@ -697,7 +771,48 @@ async def materialize_task_tables(server: 'TabularPredictionMCPServer') -> 'Task
     trace(f"[Stage 1] Done. train_table.shape={train_table.shape}, test_table.shape={test_table.shape}\n")
     return TaskTables(train_table=train_table, test_table=test_table)
 
-# ---- Stage 2  ----
+# ---- Stage 2 sub-APIs ----
+def _merge_dfs_configs(server_config: Dict[str, Any], query: 'QuerySpec') -> Dict[str, Any]:
+    trace(f"_merge_dfs_configs(server={server_config}, query_overrides={{'dfs_depth': {getattr(query, 'dfs_depth', None)}}})")
+    merged = dict(server_config)
+    if hasattr(query, "dfs_depth"):
+        merged["max_depth"] = query.dfs_depth
+    return merged
+
+def _prepare_cutoff_time_df(task_table: pd.DataFrame, id_column: str, time_column: str) -> pd.DataFrame:
+    trace(f"_prepare_cutoff_time_df(id_column={id_column}, time_column={time_column}, rows={len(task_table)})")
+    df = task_table[[id_column, time_column]].copy()
+    df.rename(columns={time_column: "cutoff_time"}, inplace=True)
+    return df
+
+def _create_transform_pipeline():
+    trace("_create_transform_pipeline()")
+    # Replace with your pipeline object; here we simulate a callable
+    def pipeline(rdb):
+        trace("  transform_pipeline(rdb): applied (featurize_datetime, drop redundant, etc.)")
+        return rdb
+    return pipeline
+
+def _generate_key_mappings(target_table: str, target_table_schema: 'RDBTableSchema') -> Dict[str, str]:
+    trace(f"_generate_key_mappings(target_table={target_table})")
+    pk = None
+    for col in target_table_schema.columns:
+        if col.dtype == "primary_key":
+            pk = col.name
+            break
+    if not pk:
+        raise ValueError(f"No primary key found for {target_table}")
+    return {"__id": f"{target_table}.{pk}"}
+
+def _generate_features(transformed_rdb: 'RDBDataset', target_df: pd.DataFrame, key_mappings: Dict[str, str], dfs_config: Dict[str, Any], feature_names=None) -> pd.DataFrame:
+    trace(f"_generate_features(rows={len(target_df)}, engine={dfs_config.get('engine')}, max_depth={dfs_config.get('max_depth')}, feature_names={'provided' if feature_names is not None else 'auto'})")
+    # Replace with your real DFS engine invocation
+    # Minimal placeholder returns target_df + 2 fake features
+    out = target_df.copy()
+    out["users.Reputation"] = 100  # dummy feature
+    out["COUNT(posts WHERE posts.OwnerUserId = users.Id)"] = 5  # dummy feature
+    return out
+
 async def generate_task_features(task_tables: 'TaskTables', server: 'TabularPredictionMCPServer') -> 'FeatureArtifacts':
     query = server.current_query_spec
     rdb = server.rdb_dataset
@@ -717,12 +832,82 @@ async def generate_task_features(task_tables: 'TaskTables', server: 'TabularPred
     trace(f"[Stage 2] Done. train_features.shape={train_features.shape}, test_features.shape={test_features.shape}\n")
     return FeatureArtifacts(train_features_table=train_features, test_features_table=test_features)
 
-# ---- Stage 3 ----
+# ---- Stage 3 sub-APIs ----
+def _merge_tabpfn_configs(server_config: Dict[str, Any], query: 'QuerySpec') -> Dict[str, Any]:
+    trace(f"_merge_tabpfn_configs(server={server_config}, query_overrides={{}})")
+    # Add per-query overrides if present; kept simple here.
+    return dict(server_config)
+
+def _handle_missing_values(df: pd.DataFrame) -> pd.DataFrame:
+    trace(f"_handle_missing_values(cols={list(df.columns)})")
+    return df.fillna(0)
+
+def _scale_features(df: pd.DataFrame) -> pd.DataFrame:
+    trace(f"_scale_features(cols={list(df.columns)})")
+    return df  # Placeholder; in production, persist scalers from train and reuse for test
+
+def _prepare_training_data(train_features_table: pd.DataFrame, task_tables: 'TaskTables', task_type: str):
+    trace(f"_prepare_training_data(task_type={task_type})")
+    feature_cols = [c for c in train_features_table.columns if c not in ["__id", "cutoff_time"]]
+    X = train_features_table[feature_cols].copy()
+    labels = task_tables.train_table[["__id", "__label"]].copy()
+    y = labels["__label"].values
+    X = _handle_missing_values(X)
+    X = _scale_features(X)
+    trace(f"  -> X_train.shape={X.shape}, y_train.shape={y.shape}")
+    return X, y
+
+def _train_tabpfn_model(train_X: pd.DataFrame, train_y, task_type: str, tabpfn_config: Dict[str, Any]):
+    trace(f"_train_tabpfn_model(task_type={task_type}, samples={len(train_X)}, config={tabpfn_config})")
+    # Replace with your TabPFNClassifier/Regressor
+    class DummyModel:
+        def fit(self, X, y): trace("  model.fit(...)")
+        def predict(self, X): trace("  model.predict(...)"); return [1]*len(X)  # dummy
+        def predict_proba(self, X): trace("  model.predict_proba(...)"); return [[0.13, 0.87]]*len(X)
+    m = DummyModel()
+    m.fit(train_X, train_y)
+    return m
+
+def _prepare_test_data(test_features_table: pd.DataFrame, train_X_columns):
+    trace(f"_prepare_test_data()")
+    X = test_features_table[[c for c in test_features_table.columns if c not in ["__id", "cutoff_time"]]].copy()
+    # Align to train columns
+    for col in train_X_columns:
+        if col not in X.columns:
+            X[col] = 0
+    X = X[train_X_columns]
+    X = _handle_missing_values(X)
+    X = _scale_features(X)
+    trace(f"  -> X_test.shape={X.shape}")
+    return X
+
+def _generate_predictions(model, test_X: pd.DataFrame, task_type: str):
+    trace(f"_generate_predictions(task_type={task_type})")
+    if task_type == "classification":
+        y_pred = model.predict(test_X)
+        y_prob = model.predict_proba(test_X)
+        # Return positive class probability for binary case
+        out_prob = [row[1] for row in y_prob]
+        return {"y_pred": y_pred, "y_prob": out_prob}
+    else:
+        y_pred = model.predict(test_X)
+        return {"y_pred": y_pred}
+
+def _format_prediction_results(test_df: pd.DataFrame, predictions: Dict[str, Any], task_type: str):
+    trace(f"_format_prediction_results(task_type={task_type})")
+    # Stage 2 output uses 'cutoff_time' as the time column
+    result = test_df[["__id", "cutoff_time"]].copy()
+    result.rename(columns={"cutoff_time": "__timestamp"}, inplace=True)
+    result["y_pred"] = predictions["y_pred"]
+    if task_type == "classification" and "y_prob" in predictions:
+        result["y_prob"] = predictions["y_prob"]
+    return result
+
 async def train_and_predict(feature_artifacts: 'FeatureArtifacts', server: 'TabularPredictionMCPServer') -> 'PredictionArtifact':
     query = server.current_query_spec
-    tabpfn_config = server.tabpfn_config
+    tabpfn_config = _merge_tabpfn_configs(server.tabpfn_config, query)
 
-    train_X, train_y = _prepare_training_data(feature_artifacts.train_features_table, task_type=query.task_type)
+    train_X, train_y = _prepare_training_data(feature_artifacts.train_features_table, task_tables=server.task_tables, task_type=query.task_type)
     model = _train_tabpfn_model(train_X, train_y, query.task_type, tabpfn_config)
 
     test_X = _prepare_test_data(feature_artifacts.test_features_table, train_X_columns=train_X.columns)

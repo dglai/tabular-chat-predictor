@@ -46,9 +46,7 @@ The function begins by accessing the key pieces of state from the server instanc
 
 ### 2. Prepare Target DataFrames for Feature Generation
 
-The function prepares the train and test tables from Stage 1 for feature generation:
-- **Extract Entity IDs and Timestamps**: The `__id` and `__timestamp` columns from the task tables are used as the basis for feature generation.
-- **Create Cutoff Time DataFrames**: These are formatted to match FastDFS's expected input format, with entity IDs mapped to their corresponding tables in the RDB.
+The function utilizes the train and test tables from Stage 1 directly for feature generation. The `__id` and `__timestamp` columns within these tables are used to map to the RDB and apply temporal cutoffs, respectively.
 
 ### 3. Apply Transform Pipeline to RDB
 
@@ -94,42 +92,31 @@ async def generate_task_features(task_tables: TaskTables, server: 'TabularPredic
     rdb = server.rdb_dataset
     dfs_config = _merge_dfs_configs(server.dfs_config, query)
     
-    # 2. Prepare cutoff time dataframes for train and test
-    train_cutoff_df = _prepare_cutoff_time_df(
-        task_tables.train_table,
-        id_column="__id",
-        time_column="__timestamp"
-    )
-    
-    test_cutoff_df = _prepare_cutoff_time_df(
-        task_tables.test_table,
-        id_column="__id",
-        time_column="__timestamp"
-    )
-    
-    # 3. Apply transform pipeline to RDB
+    # 2. Apply transform pipeline to RDB
     transform_pipeline = _create_transform_pipeline()
     transformed_rdb = transform_pipeline(rdb)
     
-    # 4. Generate key mappings based on target table
+    # 3. Generate key mappings based on target table
     key_mappings = _generate_key_mappings(
         query.target_table,
         rdb.get_table_metadata(query.target_table)
     )
     
-    # 5. Generate features for train set
+    # 4. Generate features for train set
     train_features = _generate_features(
         transformed_rdb=transformed_rdb,
-        target_df=train_cutoff_df,
+        target_df=task_tables.train_table,
         key_mappings=key_mappings,
+        cutoff_time_column="__timestamp",
         dfs_config=dfs_config
     )
     
-    # 6. Generate features for test set with same feature set
+    # 5. Generate features for test set with same feature set
     test_features = _generate_features(
         transformed_rdb=transformed_rdb,
-        target_df=test_cutoff_df,
+        target_df=task_tables.test_table,
         key_mappings=key_mappings,
+        cutoff_time_column="__timestamp",
         dfs_config=dfs_config,
         feature_names=train_features.columns
     )
@@ -206,66 +193,7 @@ query = QuerySpec(
 
 ---
 
-### Sub-API 2: `_prepare_cutoff_time_df`
-
-This function prepares a DataFrame in the format expected by FastDFS for cutoff time-based feature generation.
-
-**Signature:**
-```python
-def _prepare_cutoff_time_df(
-    task_table: pd.DataFrame,
-    id_column: str,
-    time_column: str
-) -> pd.DataFrame:
-    """
-    Prepare cutoff time DataFrame for FastDFS.
-    
-    Args:
-        task_table: Train or test table from Stage 1
-        id_column: Column name containing entity IDs
-        time_column: Column name containing timestamps
-        
-    Returns:
-        DataFrame formatted for FastDFS cutoff time feature generation
-    """
-```
-
-**Pseudocode:**
-```python
-def _prepare_cutoff_time_df(task_table, id_column, time_column):
-    # Extract relevant columns
-    cutoff_df = task_table[[id_column, time_column]].copy()
-    
-    # Rename columns to match FastDFS expectations
-    cutoff_df.rename(columns={
-        time_column: "cutoff_time"
-    }, inplace=True)
-    
-    return cutoff_df
-```
-
-**Input Example:**
-```python
-task_table = pd.DataFrame({
-    '__id': [1, 2, 3],
-    '__timestamp': [datetime(2021, 1, 1), datetime(2021, 1, 1), datetime(2021, 1, 1)],
-    '__label': [1, 0, 1],
-    'DisplayName': ['Alice', 'Bob', 'Charlie'],
-    'Reputation': [100, 200, 50]
-})
-```
-
-**Output Example:**
-```python
-pd.DataFrame({
-    '__id': [1, 2, 3],
-    'cutoff_time': [datetime(2021, 1, 1), datetime(2021, 1, 1), datetime(2021, 1, 1)]
-})
-```
-
----
-
-### Sub-API 3: `_create_transform_pipeline`
+### Sub-API 2: `_create_transform_pipeline`
 
 This function creates a transform pipeline for preprocessing the RDB dataset before feature generation.
 
@@ -309,7 +237,7 @@ RDBTransformPipeline([
 
 ---
 
-### Sub-API 4: `_generate_key_mappings`
+### Sub-API 3: `_generate_key_mappings`
 
 This function generates mappings between entity IDs in the task tables and their corresponding primary keys in the RDB.
 
@@ -369,7 +297,7 @@ target_table_schema = RDBTableSchema(
 
 ---
 
-### Sub-API 5: `_generate_features`
+### Sub-API 4: `_generate_features`
 
 This function performs the actual feature generation using FastDFS.
 
@@ -379,6 +307,7 @@ def _generate_features(
     transformed_rdb: RDBDataset,
     target_df: pd.DataFrame,
     key_mappings: Dict[str, str],
+    cutoff_time_column: str,
     dfs_config: Dict[str, Any],
     feature_names: Optional[List[str]] = None
 ) -> pd.DataFrame:
@@ -387,8 +316,9 @@ def _generate_features(
     
     Args:
         transformed_rdb: Preprocessed RDB dataset
-        target_df: Target DataFrame with entity IDs and cutoff times
+        target_df: Target DataFrame with entity IDs and timestamps
         key_mappings: Mappings from target columns to RDB primary keys
+        cutoff_time_column: Name of the column to use for cutoff times
         dfs_config: Configuration for DFS algorithm
         feature_names: Optional list of feature names to generate (for test set)
         
@@ -399,7 +329,7 @@ def _generate_features(
 
 **Pseudocode:**
 ```python
-def _generate_features(transformed_rdb, target_df, key_mappings, dfs_config, feature_names=None):
+def _generate_features(transformed_rdb, target_df, key_mappings, cutoff_time_column, dfs_config, feature_names=None):
     # Configure feature generation parameters
     config_overrides = {
         "max_depth": dfs_config.get("max_depth", 2),
@@ -417,7 +347,7 @@ def _generate_features(transformed_rdb, target_df, key_mappings, dfs_config, fea
         rdb=transformed_rdb,
         target_dataframe=target_df,
         key_mappings=key_mappings,
-        cutoff_time_column="cutoff_time",
+        cutoff_time_column=cutoff_time_column,
         config_overrides=config_overrides
     )
     
@@ -429,7 +359,9 @@ def _generate_features(transformed_rdb, target_df, key_mappings, dfs_config, fea
 transformed_rdb = RDBDataset(...)  # Preprocessed RDB
 target_df = pd.DataFrame({
     '__id': [1, 2, 3],
-    'cutoff_time': [datetime(2021, 1, 1), datetime(2021, 1, 1), datetime(2021, 1, 1)]
+    '__timestamp': [datetime(2021, 1, 1), datetime(2021, 1, 1), datetime(2021, 1, 1)],
+    'DisplayName': ['Alice', 'Bob', 'Charlie'],
+    'Reputation': [100, 200, 50]
 })
 key_mappings = {"__id": "users.Id"}
 dfs_config = {
@@ -443,7 +375,8 @@ dfs_config = {
 ```python
 pd.DataFrame({
     '__id': [1, 2, 3],
-    'cutoff_time': [datetime(2021, 1, 1), datetime(2021, 1, 1), datetime(2021, 1, 1)],
+    '__timestamp': [datetime(2021, 1, 1), datetime(2021, 1, 1), datetime(2021, 1, 1)],
+    'DisplayName': ['Alice', 'Bob', 'Charlie'],
     'users.Reputation': [100, 200, 50],
     'COUNT(posts WHERE posts.OwnerUserId = users.Id)': [5, 2, 10],
     'MEAN(posts.Score WHERE posts.OwnerUserId = users.Id)': [3.2, 4.5, 2.1],
@@ -509,31 +442,14 @@ dfs_config = _merge_dfs_configs(
 # Result: {'max_depth': 3, 'engine': 'dfs2sql', 'agg_primitives': ['count', 'mean', 'max', 'min', 'std']}
 ```
 
-**Step 2: Prepare Cutoff Time DataFrames**
-```python
-train_cutoff_df = _prepare_cutoff_time_df(
-    task_tables.train_table,
-    id_column="__id",
-    time_column="__timestamp"
-)
-# Result: DataFrame with ~15,000 rows of (__id, cutoff_time)
-
-test_cutoff_df = _prepare_cutoff_time_df(
-    task_tables.test_table,
-    id_column="__id",
-    time_column="__timestamp"
-)
-# Result: DataFrame with 1 row for user 2666
-```
-
-**Step 3: Create and Apply Transform Pipeline**
+**Step 2: Create and Apply Transform Pipeline**
 ```python
 transform_pipeline = _create_transform_pipeline()
 transformed_rdb = transform_pipeline(server.rdb_dataset)
 # Result: Preprocessed RDB with datetime features and filtered columns
 ```
 
-**Step 4: Generate Key Mappings**
+**Step 3: Generate Key Mappings**
 ```python
 key_mappings = _generate_key_mappings(
     target_table=server.current_query_spec.target_table,
@@ -542,23 +458,25 @@ key_mappings = _generate_key_mappings(
 # Result: {"__id": "users.Id"}
 ```
 
-**Step 5: Generate Features for Train Set**
+**Step 4: Generate Features for Train Set**
 ```python
 train_features = _generate_features(
     transformed_rdb=transformed_rdb,
-    target_df=train_cutoff_df,
+    target_df=task_tables.train_table,
     key_mappings=key_mappings,
+    cutoff_time_column="__timestamp",
     dfs_config=dfs_config
 )
 # Result: DataFrame with ~15,000 rows and 100+ feature columns
 ```
 
-**Step 6: Generate Features for Test Set**
+**Step 5: Generate Features for Test Set**
 ```python
 test_features = _generate_features(
     transformed_rdb=transformed_rdb,
-    target_df=test_cutoff_df,
+    target_df=task_tables.test_table,
     key_mappings=key_mappings,
+    cutoff_time_column="__timestamp",
     dfs_config=dfs_config,
     feature_names=train_features.columns
 )
@@ -571,7 +489,9 @@ test_features = _generate_features(
 FeatureArtifacts(
     train_features_table=pd.DataFrame({
         '__id': [1, 5, 8, 12, ...],                    # ~15,000 training examples
-        'cutoff_time': [datetime(2021, 1, 1), ...],    # Various historical timestamps
+        '__timestamp': [datetime(2021, 1, 1), ...],    # Various historical timestamps
+        '__label': [1, 0, 1, 0, ...],
+        'DisplayName': ['Alice', 'Bob', ...],
         'users.Reputation': [100, 200, 50, ...],       # Original features
         # Generated features (100+ columns)
         'COUNT(posts WHERE posts.OwnerUserId = users.Id)': [5, 2, 10, ...],
@@ -584,7 +504,9 @@ FeatureArtifacts(
     
     test_features_table=pd.DataFrame({
         '__id': [2666],                                # Target user
-        'cutoff_time': [datetime(2021, 1, 1)],         # Current timestamp
+        '__timestamp': [datetime(2021, 1, 1)],         # Current timestamp
+        '__label': [None],
+        'DisplayName': ['TargetUser'],
         'users.Reputation': [150],                     # Original features
         # Same generated features as train set
         'COUNT(posts WHERE posts.OwnerUserId = users.Id)': [7],

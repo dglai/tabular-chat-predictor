@@ -56,10 +56,12 @@ The function determines how to sample entities for the training set based on the
 
 ### 4. Materialize the Training Table (`train_table`)
 
-This is the core step where the training data is constructed.
-1.  **Select & Sample Entities**: Based on the determined strategy, the function selects a pool of candidate entities at each historical timestamp. It then samples from this pool using the `sampling_rate` from the `QuerySpec`. For the `activity_based` strategy, a bias is applied to favor more active entities.
-2.  **Generate Labels via `label_spec`**: The `query_spec.label_spec` contains Python code that defines the prediction target. This code is executed, passing in the server's RDB tables and the generated timestamps. It returns a DataFrame containing the `__id`, `__timestamp`, and the ground-truth `__label` for each training instance.
-3.  **Join Entity Features**: The columns from the `target_table` (excluding keys and time columns) are considered static entity features. These features are joined onto the labeled data, creating the complete training table.
+This is the core step where the training data is constructed in a single, unified process that mirrors the `convert_dataset.py` script.
+1.  **Generate Labeled Training Candidates**: The `query_spec.label_spec` is executed first. This Python code defines the prediction target and returns a DataFrame containing `__id`, `__timestamp`, and the ground-truth `__label` for every potential training instance. This may be a very large set.
+2.  **Sample, Select Features, and Materialize**: Based on the determined sampling strategy (`creation_based`, `activity_based`, or `static`), the system processes the labeled candidates. In a single logical step (likely a unified SQL query), it performs two actions:
+    *   It samples the candidates according to the `sampling_rate`.
+    *   For the sampled entities, it selects and joins the required entity feature columns from the `target_table` (excluding keys and time columns).
+This one-step process directly produces the final `train_table`.
 
 The final `train_table` contains the columns `[__id, __timestamp, __label, ...entity_features]`.
 
@@ -148,7 +150,7 @@ async def materialize_task_tables(server: 'TabularPredictionMCPServer') -> TaskT
 
 ### Sub-API 1: `_generate_timestamps`
 
-This function generates historical timestamps for training data using exponential backoff, adapted from [`convert_dataset.py:_generate_exponential_timestamps()`](convert_dataset.py:98).
+This function generates historical timestamps for training data using exponential backoff, adapted from [_generate_exponential_timestamps in convert_dataset.py](../convert_dataset.py).
 
 **Signature:**
 ```python
@@ -257,46 +259,35 @@ def _materialize_training_table(
 **Pseudocode:**
 ```python
 def _materialize_training_table(query, rdb, timestamps, target_table_df, target_table_schema):
-    # 1. Determine sampling strategy
+    # 1. Determine sampling strategy for the target table.
     sampling_strategy = _determine_sampling_strategy(
         target_table_schema=target_table_schema,
         rdb_dataset=rdb
     )
     
-    # 2. Execute label specification to get labeled data
+    # 2. Execute the label specification to get the set of all potential
+    #    training candidates with their ground-truth labels.
     labeled_data = _execute_label_spec(
         label_spec=query.label_spec,
         rdb_tables={name: rdb.get_table(name) for name in rdb.table_names},
         timestamps=pd.Series(timestamps)
     )
     
-    # 3. Apply sampling based on strategy and sampling_rate
+    # 3. In a single step, apply the appropriate sampling strategy to the labeled data,
+    #    and for the sampled rows, retrieve their corresponding entity features.
+    #    This mirrors the original script's unified query approach.
     if sampling_strategy == "creation_based":
-        sampled_data = _apply_creation_based_sampling(
-            labeled_data, target_table_df, target_table_schema, query.sampling_rate
+        train_table = _apply_creation_based_sampling_with_features(
+            labeled_data, target_table_df, target_table_schema, query.sampling_rate, query.id_column
         )
     elif sampling_strategy == "activity_based":
-        sampled_data = _apply_activity_based_sampling(
-            labeled_data, rdb, target_table_schema, query.sampling_rate
+        train_table = _apply_activity_based_sampling_with_features(
+            labeled_data, rdb, target_table_schema, query.sampling_rate, query.id_column
         )
     else:  # static
-        sampled_data = _apply_static_sampling(
-            labeled_data, query.sampling_rate
+        train_table = _apply_static_sampling_with_features(
+            labeled_data, target_table_df, target_table_schema, query.sampling_rate, query.id_column
         )
-    
-    # 4. Get entity features from target table
-    entity_features = _get_entity_features(
-        target_table_df=target_table_df,
-        target_table_schema=target_table_schema
-    )
-    
-    # 5. Join entity features onto sampled labeled data
-    train_table = sampled_data.merge(
-        entity_features,
-        left_on='__id',
-        right_on=query.id_column,
-        how='left'
-    ).drop(columns=[query.id_column])
     
     return train_table
 ```
@@ -363,31 +354,34 @@ def _materialize_test_table(query, target_table_df, target_table_schema):
     # 1. Select test entities
     if query.entity_ids is not None:
         # Filter to specific entities
-        test_entities = target_table_df[
+        test_df = target_table_df[
             target_table_df[query.id_column].isin(query.entity_ids)
-        ]
+        ].copy()
     else:
         # Use all entities in target table
-        test_entities = target_table_df.copy()
+        test_df = target_table_df.copy()
     
-    # 2. Get entity features
-    entity_features = _get_entity_features(
-        target_table_df=test_entities,
-        target_table_schema=target_table_schema
-    )
+    # 2. Identify and select entity feature columns directly
+    feature_columns = []
+    exclude_dtypes = {"primary_key", "foreign_key", "datetime"}
+    for col_schema in target_table_schema.columns:
+        if col_schema.dtype not in exclude_dtypes:
+            feature_columns.append(col_schema.name)
     
-    # 3. Create test table structure
-    test_table = entity_features.copy()
+    # Keep the primary key for the ID and the selected feature columns
+    primary_key_col = query.id_column
+    include_columns = [primary_key_col] + feature_columns
+    available_columns = [col for col in include_columns if col in test_df.columns]
+    test_table = test_df[available_columns]
+
+    # 3. Create final test table structure
     test_table['__timestamp'] = query.ts_current
-    test_table['__id'] = test_table[query.id_column]
+    test_table['__id'] = test_table[primary_key_col]
     test_table['__label'] = None  # NULL labels for prediction
-    test_table = test_table.drop(columns=[query.id_column])
+    test_table = test_table.drop(columns=[primary_key_col])
     
     # 4. Reorder columns to match training table format
-    cols = ['__id', '__timestamp', '__label'] + [
-        col for col in test_table.columns
-        if col not in ['__id', '__timestamp', '__label']
-    ]
+    cols = ['__id', '__timestamp', '__label'] + feature_columns
     test_table = test_table[cols]
     
     return test_table
@@ -597,88 +591,6 @@ rdb_dataset = RDBDataset(...)  # Contains posts, comments tables that reference 
 
 ---
 
-### Sub-API 6: `_get_entity_features`
-
-This function extracts static entity features from the target table, excluding keys and temporal columns.
-
-**Signature:**
-```python
-def _get_entity_features(
-    target_table_df: pd.DataFrame,
-    target_table_schema: RDBTableSchema
-) -> pd.DataFrame:
-    """
-    Extract entity features from target table.
-    
-    Args:
-        target_table_df: Target table DataFrame
-        target_table_schema: Target table schema metadata
-        
-    Returns:
-        DataFrame with entity features (excludes keys and time columns)
-    """
-```
-
-**Pseudocode:**
-```python
-def _get_entity_features(target_table_df, target_table_schema):
-    # 1. Identify columns to include as features
-    feature_columns = []
-    exclude_dtypes = {"primary_key", "foreign_key", "datetime"}
-    
-    for col_schema in target_table_schema.columns:
-        if col_schema.dtype not in exclude_dtypes:
-            feature_columns.append(col_schema.name)
-    
-    # 2. Include primary key for joining (will be renamed to __id later)
-    primary_key_col = None
-    for col_schema in target_table_schema.columns:
-        if col_schema.dtype == "primary_key":
-            primary_key_col = col_schema.name
-            break
-    
-    if primary_key_col:
-        include_columns = [primary_key_col] + feature_columns
-    else:
-        include_columns = feature_columns
-    
-    # 3. Select and return feature columns
-    available_columns = [col for col in include_columns if col in target_table_df.columns]
-    return target_table_df[available_columns].copy()
-```
-
-**Input Example:**
-```python
-target_table_df = pd.DataFrame({
-    'Id': [1, 2, 3],                              # primary_key - include for joining
-    'DisplayName': ['Alice', 'Bob', 'Charlie'],   # string - include as feature
-    'Reputation': [100, 200, 50],                 # int - include as feature
-    'CreationDate': [datetime(2019, 1, 1), ...], # datetime - exclude
-    'LocationId': [10, 20, 30]                    # foreign_key - exclude
-})
-
-target_table_schema = RDBTableSchema(
-    name="users",
-    columns=[
-        RDBColumnSchema(name="Id", dtype="primary_key"),
-        RDBColumnSchema(name="DisplayName", dtype="string"),
-        RDBColumnSchema(name="Reputation", dtype="int"),
-        RDBColumnSchema(name="CreationDate", dtype="datetime"),
-        RDBColumnSchema(name="LocationId", dtype="foreign_key")
-    ]
-)
-```
-
-**Output Example:**
-```python
-pd.DataFrame({
-    'Id': [1, 2, 3],                              # Primary key for joining
-    'DisplayName': ['Alice', 'Bob', 'Charlie'],   # Feature
-    'Reputation': [100, 200, 50]                  # Feature
-    # CreationDate and LocationId excluded
-})
-```
-
 ---
 
 ## Complete Workflow Example
@@ -761,32 +673,29 @@ strategy = _determine_sampling_strategy(
 # Result: "activity_based" (users table referenced by temporal tables)
 ```
 
-**Step 4: Apply Sampling and Get Entity Features**
+**Step 4: Create Training Table in a Single Process**
 ```python
-# Apply activity-based sampling (30% of users, biased toward active users)
-sampled_data = labeled_data.sample(frac=0.3, weights=activity_scores)
-
-entity_features = _get_entity_features(
-    target_table_df=server.rdb_dataset.get_table("users"),
-    target_table_schema=server.rdb_dataset.get_table_metadata("users")
+# The system now applies sampling and feature retrieval in a single step.
+# For example, using the new function from the pseudocode:
+train_table = _apply_activity_based_sampling_with_features(
+    labeled_data,
+    server.rdb_dataset,
+    server.rdb_dataset.get_table_metadata("users"),
+    server.current_query_spec.sampling_rate,
+    server.current_query_spec.id_column
 )
-# Result: DataFrame with user features (DisplayName, Reputation, etc.)
+# Result: ~15,000 training examples with timestamps, labels, and user features,
+# created without a separate feature-joining step.
 ```
 
-**Step 5: Create Training Table**
-```python
-train_table = sampled_data.merge(entity_features, left_on='__id', right_on='Id')
-# Result: ~15,000 training examples with timestamps, labels, and user features
-```
-
-**Step 6: Create Test Table**
+**Step 5: Create Test Table**
 ```python
 test_table = _materialize_test_table(
     query=server.current_query_spec,
     target_table_df=server.rdb_dataset.get_table("users"),
     target_table_schema=server.rdb_dataset.get_table_metadata("users")
 )
-# Result: 1 test example for user 2666 at timestamp 2021-01-01
+# Result: 1 test example for user 2666 at timestamp 2021-01-01, with features selected directly.
 ```
 
 ### Final Output: TaskTables
